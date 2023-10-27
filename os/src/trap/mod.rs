@@ -24,6 +24,8 @@ use riscv::register::{
     sie, stval, stvec,
 };
 
+use crate::task::update_syscall_times;
+
 global_asm!(include_str!("trap.S"));
 
 /// Initialize trap handling
@@ -53,6 +55,7 @@ pub fn trap_handler(cx: &mut TrapContext) -> &mut TrapContext {
         Trap::Exception(Exception::UserEnvCall) => {
             // jump to next instruction anyway
             cx.sepc += 4;
+            update_syscall_times(cx.x[17]);
             // get system call return value
             cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
         }
