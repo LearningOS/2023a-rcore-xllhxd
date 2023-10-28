@@ -101,14 +101,27 @@ pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
 // YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
     trace!("kernel: sys_munmap");
-    
+    // 对齐
     if _start % PAGE_SIZE != 0{
         return -1;
+    }
+    // 确保：所有的虚拟内存都被映射
+    let start_vpn = VirtAddr::from(_start).floor();
+    let end_vpn = VirtAddr::from(_start + _len).ceil();
+    let iter_vpn = VPNRange::new(start_vpn, end_vpn);
+    for vpn in iter_vpn {
+        if let Some(pte) = get_current_task_page_table_entry(vpn) {
+            if !pte.is_valid() {
+                return -1;
+            }
+        }
+        else {
+            return -1;
+        }
     }
 
     munmap(VirtAddr::from(_start), VirtAddr::from(_start + _len));
     0
-
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

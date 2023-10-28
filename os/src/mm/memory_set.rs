@@ -72,18 +72,10 @@ impl MemorySet {
     }
     /// remover framed area
     pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
-        let start_vpn:VirtPageNum = start_va.into();
-        let end_vpn:VirtPageNum = end_va.into();
+        let start_vpn:VirtPageNum = start_va.floor();
+        let end_vpn:VirtPageNum = end_va.ceil();
         let mut vpn = start_vpn;
         while vpn != end_vpn {
-            if let Some(pte) = self.page_table.translate(vpn) {
-                if !pte.is_valid() {
-                    return -1;
-                }
-            }
-            else {
-                return -1;
-            }
             self.page_table.unmap(vpn);
             vpn.step();
         }
