@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{VirtAddr, MapPermission, VirtPageNum, PageTableEntry};
 use crate::sync::UPSafeCell;
 use crate::timer::get_time_us;
 use crate::trap::TrapContext;
@@ -177,6 +178,28 @@ impl TaskManager {
             (*task_info).status= TaskStatus::Running;
         }
     }
+    /// get current task's page table entry from vpn
+    fn get_current_task_page_table_entry(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
+        let inner = self.inner.exclusive_access();
+        let current_task_id = inner.current_task;
+        inner.tasks[current_task_id].memory_set.translate(vpn)  
+    }
+    /// mmmap
+    fn mmap(&self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current_task_id = inner.current_task;
+        let current_tcb = &mut inner.tasks[current_task_id];
+        current_tcb.memory_set.insert_framed_area(start_va, end_va, permission);
+        0       
+    }
+    /// munmap
+    fn munmap(&self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current_task_id = inner.current_task;
+        let current_tcb = &mut inner.tasks[current_task_id];
+        current_tcb.memory_set.remove_framed_area(start_va, end_va);
+        0
+    }
 }
 
 /// Run the first task in task list.
@@ -235,4 +258,16 @@ pub fn update_syscall_times(syscall_id: usize) {
 /// update task info
 pub fn update_task_info(task_info: *mut TaskInfo) {
     TASK_MANAGER.update_task_info(task_info);
+}
+/// get current task's page table entry from vpn
+pub fn get_current_task_page_table_entry(vpn: VirtPageNum) -> Option<PageTableEntry> {
+    TASK_MANAGER.get_current_task_page_table_entry(vpn)
+}
+/// mmap
+pub fn mmap(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> isize {
+    TASK_MANAGER.mmap(start_va, end_va, permission)
+}
+/// munmap
+pub fn munmap(start_va: VirtAddr, end_va: VirtAddr) -> isize {
+    TASK_MANAGER.munmap(start_va, end_va)
 }

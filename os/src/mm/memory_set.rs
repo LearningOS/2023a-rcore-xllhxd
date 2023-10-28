@@ -70,6 +70,25 @@ impl MemorySet {
         }
         self.areas.push(map_area);
     }
+    /// remover framed area
+    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> isize {
+        let start_vpn:VirtPageNum = start_va.into();
+        let end_vpn:VirtPageNum = end_va.into();
+        let mut vpn = start_vpn;
+        while vpn != end_vpn {
+            if let Some(pte) = self.page_table.translate(vpn) {
+                if !pte.is_valid() {
+                    return -1;
+                }
+            }
+            else {
+                return -1;
+            }
+            self.page_table.unmap(vpn);
+            vpn.step();
+        }
+        0
+    }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
         self.page_table.map(
@@ -232,6 +251,10 @@ impl MemorySet {
     /// Translate a virtual page number to a page table entry
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
+    }
+    /// get page table
+    pub fn get_page_table(&mut self) -> &mut PageTable {
+        &mut self.page_table
     }
     /// shrink the area to new_end
     #[allow(unused)]
