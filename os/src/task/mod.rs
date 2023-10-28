@@ -16,6 +16,7 @@ mod task;
 
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -24,6 +25,7 @@ pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
 
+use crate::syscall::TaskInfo;
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -79,6 +81,7 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.start_time = get_time_us() / 1000;
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -153,6 +156,27 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// update the syscall times
+    fn update_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current_task_id = inner.current_task;
+        let current_tcb = &mut inner.tasks[current_task_id];
+        current_tcb.syscall_times[syscall_id] += 1;
+        drop(inner);
+    }
+    /// update_task_info
+    fn update_task_info(&self, task_info: *mut TaskInfo) {
+        let mut inner = self.inner.exclusive_access();
+        let current_task_id = inner.current_task;
+        let current_tcb = &mut inner.tasks[current_task_id];
+        let current_time = get_time_us() / 1000;
+        unsafe {
+            (*task_info).time = current_time - current_tcb.start_time;
+            (*task_info).syscall_times = current_tcb.syscall_times;
+            (*task_info).status= TaskStatus::Running;
+        }
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +225,14 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// function
+pub fn update_syscall_times(syscall_id: usize) {
+    TASK_MANAGER.update_syscall_times(syscall_id);
+}
+
+/// update task info
+pub fn update_task_info(task_info: *mut TaskInfo) {
+    TASK_MANAGER.update_task_info(task_info);
 }
