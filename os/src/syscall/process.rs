@@ -3,13 +3,13 @@
 use alloc::sync::Arc;
 
 use crate::{
-    config::MAX_SYSCALL_NUM,
+    config::{MAX_SYSCALL_NUM, PAGE_SIZE},
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
+    mm::{translated_refmut, translated_str, VirtAddr, VPNRange, MapPermission},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next, TaskStatus,
-    },
+        suspend_current_and_run_next, TaskStatus, TaskControlBlock,
+    }, timer::get_time_us,
 };
 
 #[repr(C)]
@@ -119,10 +119,16 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_get_time",
         current_task().unwrap().pid.0
     );
-    -1
+    let us = get_time_us();
+    let kernel_ptr = translated_refmut(current_user_token(), _ts);
+    *kernel_ptr = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
@@ -139,19 +145,67 @@ pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_mmap",
         current_task().unwrap().pid.0
     );
-    -1
+
+    if _start % PAGE_SIZE != 0{
+        return -1;
+    }
+
+    if _port & !0x7 != 0 || _port & 0x7 == 0 {
+        return -1;
+    }
+    
+    let start_vpn = VirtAddr::from(_start).floor();
+    let end_vpn = VirtAddr::from(_start + _len).ceil();
+    let iter_vpn = VPNRange::new(start_vpn, end_vpn);
+    for vpn in iter_vpn {
+        if let Some(pte) = current_task().unwrap().inner_exclusive_access().memory_set.translate(vpn) {
+            if pte.is_valid() {
+                return -1;
+            }
+        }
+    }
+
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.memory_set.insert_framed_area(
+        VirtAddr::from(_start), 
+        VirtAddr::from(_start + _len),  
+        MapPermission::from_bits_truncate((_port << 1) as u8 )| MapPermission::U
+    );
+    0
 }
 
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_munmap",
         current_task().unwrap().pid.0
     );
-    -1
+
+    if _start % PAGE_SIZE != 0{
+        return -1;
+    }
+
+    let start_vpn = VirtAddr::from(_start).floor();
+    let end_vpn = VirtAddr::from(_start + _len).ceil();
+    let iter_vpn = VPNRange::new(start_vpn, end_vpn);
+    for vpn in iter_vpn {
+        if let Some(pte) = current_task().unwrap().inner_exclusive_access().memory_set.translate(vpn) {
+            if !pte.is_valid() {
+                return -1;
+            }
+        }
+        else {
+            return -1;
+        }
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.memory_set.remove_framed_area(VirtAddr::from(_start), VirtAddr::from(_start+ _len));
+    0
 }
 
 /// change data segment size
@@ -168,10 +222,32 @@ pub fn sys_sbrk(size: i32) -> isize {
 /// HINT: fork + exec =/= spawn
 pub fn sys_spawn(_path: *const u8) -> isize {
     trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_spawn",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let path = translated_str(token, _path);
+    if let Some(inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let data = inode.read_all();
+        
+        let current_task = current_task().unwrap();
+        let mut cuurent_inner = current_task.inner_exclusive_access();
+        
+        let child_task = Arc::new(TaskControlBlock::new(data.as_slice()));
+        let mut child_inner = child_task.inner_exclusive_access();
+
+        child_inner.parent = Some(Arc::downgrade(&current_task));
+        cuurent_inner.children.push(child_task.clone());
+        drop(cuurent_inner);
+        drop(child_inner);
+
+        let pid = child_task.pid.0 as isize;
+        add_task(child_task);
+        pid
+    }
+    else {
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
