@@ -183,4 +183,95 @@ impl Inode {
         });
         block_cache_sync_all();
     }
+    /// link file
+    pub fn link(&self, old_name: &str, new_name: &str) -> isize {
+        let mut fs = self.fs.lock();
+
+        let old_inode = self.read_disk_inode(|disk_inode| self.find_inode_id(old_name, disk_inode));
+        if old_inode.is_none() {
+            return -1;
+        }
+        let (block_id, block_offset) = fs.get_disk_inode_pos(old_inode.unwrap());
+        
+        // update link count
+        get_block_cache(block_id as usize, Arc::clone(&self.block_device))
+            .lock()
+            .modify(block_offset, |disk_inode: &mut DiskInode| disk_inode.link_count += 1);
+        
+        // update the direntry table
+        self.modify_disk_inode(|disk_inode| {
+            let old_size = disk_inode.size;
+            let file_conut = (disk_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_conut + 1) * DIRENT_SZ;
+            self.increase_size(new_size as u32, disk_inode, &mut fs);
+            let direntry = DirEntry::new(new_name, old_inode.unwrap());
+            disk_inode.write_at(old_size as usize, direntry.as_bytes(), &self.block_device);
+        });
+        block_cache_sync_all();
+        0 
+    }
+    /// unlink file
+    pub fn unlink(&self, name: &str) -> isize {
+        let mut fs = self.fs.lock();
+        let mut inode: u32 = 0;
+        let mut v: Vec<DirEntry> = Vec::new();
+
+        // 获取所有的非 name 的目录项以及获取 name 所对应的 inode
+        self.modify_disk_inode(|disk_inpde| {
+            let file_count = (disk_inpde.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                let mut direntry = DirEntry::empty();
+                assert_eq!(
+                    disk_inpde.read_at(i * DIRENT_SZ, direntry.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ
+                );
+                if direntry.name() != name {
+                    v.push(direntry);
+                }
+                else {
+                    inode = direntry.inode_id();
+                }
+            }
+        });
+        
+        if inode == 0 {
+            return -1;
+        }
+
+        // 重写目录项，此时不含 name 所对应的目录项
+        self.modify_disk_inode(|disk_inode| {
+            let size = disk_inode.size;
+            let all_block = disk_inode.clear_size(&self.block_device);
+            assert!(all_block.len() == DiskInode::total_blocks(size) as usize);
+            for block in all_block.into_iter() {
+                fs.dealloc_data(block);
+            }
+            self.increase_size((v.len() * DIRENT_SZ) as u32, disk_inode, &mut fs);
+            for (i, direntry) in v.iter().enumerate() {
+                disk_inode.write_at(i * DIRENT_SZ, direntry.as_bytes(), &self.block_device);
+            }
+        });
+
+        // 处理 name 所对应的目录项
+        let (block_id, block_offset) = fs.get_disk_inode_pos(inode);
+        get_block_cache(block_id as usize, Arc::clone(&self.block_device))
+            .lock()
+            .modify(block_offset, |disk_inode: &mut DiskInode| {
+                disk_inode.link_count -= 1;
+                if  disk_inode.link_count == 0 {
+                    let size = disk_inode.size;
+                    let all_block = disk_inode.clear_size(&self.block_device);
+                    assert!(all_block.len() == DiskInode::total_blocks(size) as usize);
+                    for block in all_block.into_iter() {
+                        fs.dealloc_data(block);
+                    }
+                }
+            });
+            block_cache_sync_all();
+            0  
+    }
+    /// get link count from inode
+    pub fn get_link_count(&self) -> u32 {
+        self.read_disk_inode(|disk_inode| disk_inode.link_count)
+    }
 }

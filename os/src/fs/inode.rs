@@ -4,7 +4,7 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
+use super::{File, StatMode};
 use crate::drivers::BLOCK_DEVICE;
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
@@ -70,6 +70,14 @@ pub fn list_apps() {
     println!("**************/");
 }
 
+/// link file
+pub fn link_file(old_name: &str, new_name: &str) -> isize {
+    ROOT_INODE.link(old_name, new_name)
+}
+/// unlink file
+pub fn unlink_file(name: &str) -> isize {
+    ROOT_INODE.unlink(name)
+}
 bitflags! {
     ///  The flags argument to the open() system call is constructed by ORing together zero or more of the following values:
     pub struct OpenFlags: u32 {
@@ -154,5 +162,13 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn stat(&self, stat: &mut super::Stat) -> isize {
+        let inner = self.inner.exclusive_access();
+        stat.dev = 0;
+        stat.ino = 0;
+        stat.mode = StatMode::FILE;
+        stat.nlink = inner.inode.get_link_count();
+        0
     }
 }
